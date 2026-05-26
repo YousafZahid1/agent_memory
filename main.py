@@ -15,7 +15,7 @@ and the second thing is have  supervisor agent with agent control panel where th
 This is the project
 
 """
-
+from functools import lru_cache
 import json
 import uuid
 import os
@@ -277,59 +277,76 @@ Tool calls:
 
 Context:
 {self.context}
-"""
+"""# both tool_r0uter and cll_llm should be ina  while looop until model decides to stop!
+    parent_prompt=str()
+    while True:
 
-    def call_llm(self, user_input, retrieved_context=None):
-        user_message = user_input
-        if retrieved_context:
-            user_message = f"Relevant context from memory:\n{retrieved_context}\n\nTask:\n{user_input}"
+        def call_llm(self, user_input, retrieved_context=None):
+            global parent_prompt
+            user_message = user_input
+            if retrieved_context:
+                user_message = f"Relevant context from memory:\n{retrieved_context}\n\nTask:\n{user_input}"
 
-        response = self.client.chat.completions.create(
-            model="Llama-4-Maverick-17B-128E-Instruct-FP8",
-            messages=[
-                {"role": "system", "content": self.system_prompt},
-                {"role": "user", "content": user_message}
-            ],
-        )
-        return response.completion_message.content.text
+            response = self.client.chat.completions.create(
+                model="Llama-4-Maverick-17B-128E-Instruct-FP8",
+                messages=[
+                    {"role": "system", "content": self.system_prompt},
+                    {"role": "user", "content": user_message}
+                ],
+            )
+            parent_prompt+= f"{user_message}  \t {response.completion_message.content.text}\n"
+            return response.completion_message.content.text
+        @lru_cache(maxsize=128)
+        def tool_router(self, output): #instead of sending llm response to tool router ; DO reason+React ; from one shot execution to iterative loop! then observeration comes in; and gives agents raw data back; once agent has enough info and sotps calling tool and gives final resposne
+            try:
+                data = json.loads(output)
+                action = data.get("action")
 
-    def tool_router(self, output):
-        try:
-            data = json.loads(output)
-            action = data.get("action")
+                if action == "web_search":
+                    search_results = self.web_tool.search(data["query"])
+                    self.shared_workspace.findings.append({
+                        "type": "web_search",
+                        "query": data["query"],
+                        "results": search_results
+                    })
+                    return {"status": "success", "action": "web_search", "results": search_results}
 
-            if action == "web_search":
-                search_results = self.web_tool.search(data["query"])
-                self.shared_workspace.findings.append({
-                    "type": "web_search",
-                    "query": data["query"],
-                    "results": search_results
-                })
-                return {"status": "success", "action": "web_search", "results": search_results}
+                if action == "write_workspace":
+                    self.shared_workspace.notes.append(data["content"])
+                    self.shared_workspace.findings.append({
+                        "type": "workspace_write",
+                        "content": data["content"]
+                    })
+                    return {"status": "success", "action": "write_workspace", "message": "Note stored"}
 
-            if action == "write_workspace":
-                self.shared_workspace.notes.append(data["content"])
-                self.shared_workspace.findings.append({
-                    "type": "workspace_write",
-                    "content": data["content"]
-                })
-                return {"status": "success", "action": "write_workspace", "message": "Note stored"}
+                if action == "spawn_agent":
+                    a = agent(data["name"], data.get("role", "agent"), 10)
+                    self.registry.register(a)
+                    self.shared_workspace.findings.append({
+                        "type": "agent_spawned",
+                        "agent_name": data["name"],
+                        "agent_id": a.id
+                    })
+                    return {"status": "success", "action": "spawn_agent", "agent_id": a.id}
 
-            if action == "spawn_agent":
-                a = agent(data["name"], data.get("role", "agent"), 10)
-                self.registry.register(a)
-                self.shared_workspace.findings.append({
-                    "type": "agent_spawned",
-                    "agent_name": data["name"],
-                    "agent_id": a.id
-                })
-                return {"status": "success", "action": "spawn_agent", "agent_id": a.id}
+            except json.JSONDecodeError:
+                return {"status": "error", "message": "Invalid JSON from LLM", "raw_output": output}
+            except Exception as e:
+                return {"status": "error", "message": str(e), "raw_output": output}
 
-        except json.JSONDecodeError:
-            return {"status": "error", "message": "Invalid JSON from LLM", "raw_output": output}
-        except Exception as e:
-            return {"status": "error", "message": str(e), "raw_output": output}
+        parent_prompt+= f"{user_message}  \t {response.completion_message.content.text} \t {tool_router(self, output) }\n"
+        response1 = self.client.chat.completions.create(
+                        model="Llama-4-Maverick-17B-128E-Instruct-FP8",
+                        messages=[
+                            {"role": "system", "content": self.system_prompt},
+                            {"role": "user", "content": f" You have all this information such s the questions longside the response being generted when you think the information is enough say STOP or when tokens are being wasted by the same question again and again say \"stop\" in your response {parent_prompt}"}
+                        ],
+                    )
+        if "stop" in str(response1.completion_message.content.text): break #while loop not "function"
 
+
+####
+    
     def synthesize(self, task, tool_result):
         # Send tool results back to LLM to produce a real answer
         tool_output_text = json.dumps(tool_result, indent=2)
@@ -347,7 +364,7 @@ Context:
             ],
         )
         return response.completion_message.content.text
-
+    @lru_cache(maxsize=128)
     def save_to_memory(self, task, synthesis):
         from sentence_transformers import SentenceTransformer
         import chromadb
@@ -372,7 +389,7 @@ Context:
             mem_client.add(content=text, container_tag=USER_ID)
         except Exception:
             pass
-
+    @lru_cache(maxsize=128)
     def run(self, task):
         self.state.update_state("thinking")
 
@@ -423,7 +440,7 @@ if __name__ == "__main__":
 
     print("=== Supervisor Agent Control Panel ===\n")
 
-    test_task = "Find information about recent AI breakthroughs"
+    test_task = "Tell me about Yousaf" ##Question
     print(f"Task: {test_task}\n")
 
     result = supervisor.run(test_task)
