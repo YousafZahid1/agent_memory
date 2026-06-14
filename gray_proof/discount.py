@@ -9,4 +9,4 @@ def apply_discount(price, percent):
         apply_discount(50, 10)  -> 45.0   # 10% off 50 leaves 45
         apply_discount(100, 0)  -> 100.0  # no discount, full price
     """
-    return price * percent / 100.0
+    return price - (price * percent / 100.0)
