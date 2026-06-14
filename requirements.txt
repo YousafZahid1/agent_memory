@@ -1,0 +1,7 @@
+chromadb
+ddgs
+llama_api_client
+pypdf
+python-dotenv
+sentence_transformers
+supermemory
